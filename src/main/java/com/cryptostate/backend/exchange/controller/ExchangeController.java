@@ -2,6 +2,7 @@ package com.cryptostate.backend.exchange.controller;
 
 import com.cryptostate.backend.exchange.dto.ConnectionResponse;
 import com.cryptostate.backend.exchange.dto.CreateConnectionRequest;
+import com.cryptostate.backend.exchange.dto.DirectSyncResult;
 import com.cryptostate.backend.exchange.dto.UpdateConnectionRequest;
 import com.cryptostate.backend.exchange.model.SyncJob;
 import com.cryptostate.backend.exchange.service.ExchangeService;
@@ -57,6 +58,12 @@ public class ExchangeController {
         SyncJob job = exchangeService.triggerSync(principal.getName(), id);
         return ResponseEntity.accepted()
                 .body(Map.of("jobId", job.getId().toString(), "status", job.getStatus().name()));
+    }
+
+    @PostMapping("/connections/{id}/sync/direct")
+    public ResponseEntity<DirectSyncResult> triggerDirectSync(
+            Principal principal, @PathVariable String id) {
+        return ResponseEntity.ok(exchangeService.triggerDirectSync(principal.getName(), id));
     }
 
     @GetMapping("/sync-jobs/{jobId}")

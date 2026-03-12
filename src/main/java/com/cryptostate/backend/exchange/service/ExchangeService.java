@@ -5,18 +5,23 @@ import com.cryptostate.backend.auth.repository.UserRepository;
 import com.cryptostate.backend.common.exception.ApiException;
 import com.cryptostate.backend.common.util.EncryptionService;
 import com.cryptostate.backend.common.util.MemcachedService;
+import com.cryptostate.backend.exchange.adapter.ExchangeAdapter;
 import com.cryptostate.backend.exchange.adapter.ExchangeAdapterRegistry;
-import com.cryptostate.backend.exchange.dto.CreateConnectionRequest;
 import com.cryptostate.backend.exchange.dto.ConnectionResponse;
+import com.cryptostate.backend.exchange.dto.CreateConnectionRequest;
+import com.cryptostate.backend.exchange.dto.DirectSyncResult;
 import com.cryptostate.backend.exchange.model.ExchangeConnection;
 import com.cryptostate.backend.exchange.model.SyncJob;
 import com.cryptostate.backend.exchange.repository.ExchangeConnectionRepository;
 import com.cryptostate.backend.exchange.repository.SyncJobRepository;
+import com.cryptostate.backend.transaction.model.NormalizedTransaction;
+import com.cryptostate.backend.transaction.service.TransactionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,6 +37,7 @@ public class ExchangeService {
     private final CloudflareQueueService cloudflareQueueService;
     private final ExchangeAdapterRegistry adapterRegistry;
     private final MemcachedService memcachedService;
+    private final TransactionService transactionService;
 
     // ── Connections ──────────────────────────────────────────────────────────
 
@@ -129,5 +135,61 @@ public class ExchangeService {
         return syncJobRepository
                 .findByIdAndUserId(UUID.fromString(jobId), UUID.fromString(userId))
                 .orElseThrow(() -> ApiException.notFound("Job no encontrado"));
+    }
+
+    // ── Sync directo (sin Cloudflare Queue) ───────────────────────────────────
+
+    @Transactional
+    public DirectSyncResult triggerDirectSync(String userId, String connectionId) {
+        ExchangeConnection conn = connectionRepository
+                .findByIdAndUserId(UUID.fromString(connectionId), UUID.fromString(userId))
+                .orElseThrow(() -> ApiException.notFound("Conexión no encontrada"));
+
+        if (!conn.isActive()) {
+            throw ApiException.badRequest("La conexión está desactivada");
+        }
+
+        User user = userRepository.findById(UUID.fromString(userId))
+                .orElseThrow(() -> ApiException.notFound("Usuario no encontrado"));
+
+        SyncJob job = syncJobRepository.save(SyncJob.builder()
+                .user(user)
+                .exchangeId(conn.getExchangeId())
+                .status(SyncJob.SyncStatus.PROCESSING)
+                .build());
+
+        try {
+            ExchangeAdapter adapter = adapterRegistry.get(conn.getExchangeId());
+
+            String apiKey    = encryptionService.decrypt(conn.getApiKeyEncrypted());
+            String apiSecret = encryptionService.decrypt(conn.getApiSecretEncrypted());
+
+            Instant from = conn.getLastSyncAt() != null
+                    ? conn.getLastSyncAt()
+                    : Instant.now().minus(90, java.time.temporal.ChronoUnit.DAYS);
+            Instant to   = Instant.now();
+
+            List<NormalizedTransaction> txs = adapter.fetchAndNormalize(apiKey, apiSecret, from, to, userId);
+            int saved = transactionService.upsertAll(txs);
+
+            conn.setLastSyncAt(to);
+
+            job.setStatus(SyncJob.SyncStatus.DONE);
+            job.setCompletedAt(to);
+            syncJobRepository.save(job);
+
+            memcachedService.delete(MemcachedService.dashboardKey(userId));
+
+            log.info("Sync directo completado: userId={} exchange={} txs={}", userId, conn.getExchangeId(), saved);
+            return new DirectSyncResult(job.getId().toString(), "DONE", conn.getExchangeId(), saved, null);
+
+        } catch (Exception e) {
+            job.setStatus(SyncJob.SyncStatus.FAILED);
+            job.setError(e.getMessage());
+            job.setCompletedAt(Instant.now());
+            syncJobRepository.save(job);
+            log.error("Sync directo fallido: userId={} exchange={} error={}", userId, conn.getExchangeId(), e.getMessage());
+            return new DirectSyncResult(job.getId().toString(), "FAILED", conn.getExchangeId(), 0, e.getMessage());
+        }
     }
 }
