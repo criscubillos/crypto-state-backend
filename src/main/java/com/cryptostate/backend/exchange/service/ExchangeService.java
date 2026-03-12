@@ -10,6 +10,7 @@ import com.cryptostate.backend.exchange.adapter.ExchangeAdapterRegistry;
 import com.cryptostate.backend.exchange.dto.ConnectionResponse;
 import com.cryptostate.backend.exchange.dto.CreateConnectionRequest;
 import com.cryptostate.backend.exchange.dto.DirectSyncResult;
+import com.cryptostate.backend.exchange.event.SyncRequestEvent;
 import com.cryptostate.backend.exchange.model.ExchangeConnection;
 import com.cryptostate.backend.exchange.model.SyncJob;
 import com.cryptostate.backend.exchange.repository.ExchangeConnectionRepository;
@@ -18,6 +19,7 @@ import com.cryptostate.backend.transaction.model.NormalizedTransaction;
 import com.cryptostate.backend.transaction.service.TransactionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,10 +36,10 @@ public class ExchangeService {
     private final SyncJobRepository syncJobRepository;
     private final UserRepository userRepository;
     private final EncryptionService encryptionService;
-    private final CloudflareQueueService cloudflareQueueService;
     private final ExchangeAdapterRegistry adapterRegistry;
     private final MemcachedService memcachedService;
     private final TransactionService transactionService;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ── Connections ──────────────────────────────────────────────────────────
 
@@ -122,11 +124,9 @@ public class ExchangeService {
                 .exchangeId(conn.getExchangeId())
                 .build());
 
-        // Publicar mensaje mínimo a Cloudflare Queue
-        cloudflareQueueService.publishSyncMessage(userId, conn.getExchangeId());
-
-        // Invalidar dashboard en cache
-        memcachedService.delete(MemcachedService.dashboardKey(userId));
+        // Publicar evento local — procesado por SyncWorker tras el commit
+        eventPublisher.publishEvent(new SyncRequestEvent(
+                userId, conn.getId().toString(), job.getId().toString(), conn.getExchangeId()));
 
         return job;
     }
