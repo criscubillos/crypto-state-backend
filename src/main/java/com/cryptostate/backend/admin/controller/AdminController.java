@@ -1,10 +1,9 @@
 package com.cryptostate.backend.admin.controller;
 
+import com.cryptostate.backend.admin.dto.AdminStats;
+import com.cryptostate.backend.admin.dto.UserSummary;
+import com.cryptostate.backend.admin.service.AdminService;
 import com.cryptostate.backend.auth.model.Plan;
-import com.cryptostate.backend.auth.model.User;
-import com.cryptostate.backend.auth.repository.UserRepository;
-import com.cryptostate.backend.common.exception.ApiException;
-import com.cryptostate.backend.common.util.MemcachedService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.security.Principal;
 import java.util.Map;
 import java.util.UUID;
 
@@ -22,50 +22,46 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AdminController {
 
-    private final UserRepository userRepository;
-    private final MemcachedService memcachedService;
+    private final AdminService adminService;
+
+    // ── Estadísticas ─────────────────────────────────────────────────────────
+
+    @GetMapping("/stats")
+    public ResponseEntity<AdminStats> getStats() {
+        return ResponseEntity.ok(adminService.getStats());
+    }
+
+    // ── Usuarios ─────────────────────────────────────────────────────────────
 
     @GetMapping("/users")
-    public ResponseEntity<Page<User>> listUsers(@PageableDefault(size = 20) Pageable pageable) {
-        return ResponseEntity.ok(userRepository.findAll(pageable));
+    public ResponseEntity<Page<UserSummary>> listUsers(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String plan,
+            @RequestParam(required = false) String country,
+            @RequestParam(required = false) Boolean active,
+            @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
+        return ResponseEntity.ok(adminService.listUsers(search, plan, country, active, pageable));
+    }
+
+    @GetMapping("/users/{id}")
+    public ResponseEntity<UserSummary> getUser(@PathVariable UUID id) {
+        return ResponseEntity.ok(adminService.getUser(id));
     }
 
     @PatchMapping("/users/{id}/plan")
-    public ResponseEntity<Map<String, String>> changePlan(
-            @PathVariable UUID id, @RequestBody Map<String, String> body) {
+    public ResponseEntity<UserSummary> changePlan(
+            @PathVariable UUID id,
+            @RequestBody Map<String, String> body,
+            Principal principal) {
         Plan newPlan = Plan.valueOf(body.get("plan").toUpperCase());
-
-        User user = userRepository.findById(id)
-                .orElseThrow(() -> ApiException.notFound("Usuario no encontrado"));
-        user.setPlan(newPlan);
-        userRepository.save(user);
-
-        // Invalidar cache del usuario afectado
-        memcachedService.deleteUserSessions(id.toString());
-
-        return ResponseEntity.ok(Map.of(
-                "message", "Plan actualizado",
-                "userId", id.toString(),
-                "plan", newPlan.name()
-        ));
+        return ResponseEntity.ok(adminService.changePlan(id, newPlan, principal.getName()));
     }
 
     @PatchMapping("/users/{id}/active")
-    public ResponseEntity<Map<String, String>> toggleActive(
-            @PathVariable UUID id, @RequestBody Map<String, Boolean> body) {
-        User user = userRepository.findById(id)
-                .orElseThrow(() -> ApiException.notFound("Usuario no encontrado"));
-        user.setActive(body.get("active"));
-        userRepository.save(user);
-
-        if (!Boolean.TRUE.equals(body.get("active"))) {
-            memcachedService.deleteUserSessions(id.toString());
-        }
-
-        return ResponseEntity.ok(Map.of(
-                "message", "Estado actualizado",
-                "userId", id.toString(),
-                "active", String.valueOf(user.isActive())
-        ));
+    public ResponseEntity<UserSummary> toggleActive(
+            @PathVariable UUID id,
+            @RequestBody Map<String, Boolean> body,
+            Principal principal) {
+        return ResponseEntity.ok(adminService.toggleActive(id, body.get("active"), principal.getName()));
     }
 }

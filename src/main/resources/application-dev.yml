@@ -1,8 +1,8 @@
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/cryptostate
-    username: ${DB_USER:postgres}
-    password: ${DB_PASSWORD:postgres}
+    username: ${DB_USER:cryptostate}
+    password: ${DB_PASSWORD:cryptostate123}
     hikari:
       maximum-pool-size: 5
       minimum-idle: 2
