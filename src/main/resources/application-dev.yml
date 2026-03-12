@@ -30,7 +30,7 @@ app:
   jwt:
     secret: dev-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm-ok
   encryption:
-    key: dGhpcysraXMrYStkZXYra2V5K2ZvcitlbmNyeXB0aW9u  # base64 de 32 bytes (solo dev)
+    key: rmq/kZGHqKTx5Z3rH+ur2yzy3Ai4MfqFquIl6CV+mJA=  # AES-256: exactamente 32 bytes (solo dev)
   cloudflare:
     account-id: dev-account
     queue-id: dev-queue
