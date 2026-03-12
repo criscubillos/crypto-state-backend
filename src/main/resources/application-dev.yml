@@ -37,4 +37,6 @@ app:
     api-token: dev-token
   resend:
     api-key: dev-resend-key
-  frontend-url: http://localhost:9000
+  allowed-origins:
+    - http://localhost:9000
+    - http://192.168.100.234:9000

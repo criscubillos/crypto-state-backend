@@ -19,7 +19,7 @@ public class EmailService {
     private final WebClient.Builder webClientBuilder;
 
     public void sendVerificationEmail(String toEmail, String name, String verificationToken) {
-        String verificationUrl = appProperties.getFrontendUrl()
+        String verificationUrl = appProperties.getAllowedOrigins().get(0)
                 + "/verify-email?token=" + verificationToken;
 
         sendEmail(toEmail, "Verifica tu cuenta en CryptoState",

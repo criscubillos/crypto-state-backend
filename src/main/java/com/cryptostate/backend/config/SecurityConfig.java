@@ -47,8 +47,13 @@ public class SecurityConfig {
                 .contentTypeOptions(ct -> {})
             )
 
+            // CORS delegado al CorsFilter bean
+            .cors(cors -> cors.configure(http))
+
             // Autorización
             .authorizeHttpRequests(auth -> auth
+                // Preflight CORS
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 // Endpoints públicos
                 .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login",
                                  "/api/auth/refresh").permitAll()

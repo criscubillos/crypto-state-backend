@@ -5,6 +5,8 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 @Getter
 @Setter
 @Component
@@ -18,7 +20,7 @@ public class AppProperties {
     private Resend resend = new Resend();
     private Ollama ollama = new Ollama();
     private RateLimit rateLimit = new RateLimit();
-    private String frontendUrl = "http://localhost:9000";
+    private List<String> allowedOrigins = new java.util.ArrayList<>(List.of("http://localhost:9000"));
 
     @Getter @Setter
     public static class Jwt {
