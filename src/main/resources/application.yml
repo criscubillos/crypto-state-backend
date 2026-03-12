@@ -1,0 +1,102 @@
+spring:
+  application:
+    name: crypto-state-backend
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+  # JPA
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: public
+
+  # Flyway (migraciones de BD)
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # OAuth2 Google
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            scope:
+              - email
+              - profile
+            redirect-uri: "{baseUrl}/auth/oauth2/callback/{registrationId}"
+
+  # Cache (desactivado por defecto; MemcachedCacheManager lo sobreescribe)
+  cache:
+    type: none
+
+server:
+  port: 9001
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+# Actuator — solo /health e /info públicos
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+# JWT
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    access-token-expiration-ms: 900000        # 15 min
+    refresh-token-expiration-ms: 604800000    # 7 días
+
+  # Memcached
+  memcached:
+    host: localhost
+    port: 11211
+    default-ttl: 300                          # 5 min por defecto
+
+  # Encriptación de API keys de exchanges
+  encryption:
+    key: ${ENCRYPTION_KEY}                    # AES-256, 32 bytes base64
+
+  # Cloudflare Queue
+  cloudflare:
+    account-id: ${CF_ACCOUNT_ID}
+    queue-id: ${CF_QUEUE_ID}
+    api-token: ${CF_API_TOKEN}
+
+  # Resend (email)
+  resend:
+    api-key: ${RESEND_API_KEY}
+    from: noreply@cryptostate.app
+
+  # Ollama (LLM local)
+  ollama:
+    base-url: http://localhost:11434
+    model: qwen3
+
+  # Frontend URL (para CORS y links en emails)
+  frontend-url: ${FRONTEND_URL:http://localhost:9000}
+
+  # Rate limiting
+  rate-limit:
+    auth:
+      capacity: 5
+      refill-duration-minutes: 15
+    sync:
+      capacity: 3
+      refill-duration-minutes: 1

@@ -1,0 +1,40 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/cryptostate
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: update   # en dev se auto-actualiza el schema
+
+  flyway:
+    enabled: false       # en dev usamos ddl-auto=update
+
+server:
+  error:
+    include-message: always
+    include-stacktrace: on_param
+
+logging:
+  level:
+    com.cryptostate: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+
+app:
+  jwt:
+    secret: dev-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm-ok
+  encryption:
+    key: dGhpcysraXMrYStkZXYra2V5K2ZvcitlbmNyeXB0aW9u  # base64 de 32 bytes (solo dev)
+  cloudflare:
+    account-id: dev-account
+    queue-id: dev-queue
+    api-token: dev-token
+  resend:
+    api-key: dev-resend-key
+  frontend-url: http://localhost:9000
