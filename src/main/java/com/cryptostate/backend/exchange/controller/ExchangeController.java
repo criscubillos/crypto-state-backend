@@ -2,6 +2,7 @@ package com.cryptostate.backend.exchange.controller;
 
 import com.cryptostate.backend.exchange.dto.ConnectionResponse;
 import com.cryptostate.backend.exchange.dto.CreateConnectionRequest;
+import com.cryptostate.backend.exchange.dto.UpdateConnectionRequest;
 import com.cryptostate.backend.exchange.model.SyncJob;
 import com.cryptostate.backend.exchange.service.ExchangeService;
 import jakarta.validation.Valid;
@@ -32,6 +33,15 @@ public class ExchangeController {
     @GetMapping("/connections")
     public ResponseEntity<List<ConnectionResponse>> listConnections(Principal principal) {
         return ResponseEntity.ok(exchangeService.listConnections(principal.getName()));
+    }
+
+    @PatchMapping("/connections/{id}")
+    public ResponseEntity<ConnectionResponse> updateConnection(
+            Principal principal, @PathVariable String id,
+            @RequestBody UpdateConnectionRequest req) {
+        return ResponseEntity.ok(
+                exchangeService.updateConnection(principal.getName(), id,
+                        req.apiKey(), req.apiSecret(), req.label()));
     }
 
     @DeleteMapping("/connections/{id}")

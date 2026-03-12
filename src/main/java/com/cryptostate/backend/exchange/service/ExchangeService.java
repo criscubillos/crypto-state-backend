@@ -76,6 +76,26 @@ public class ExchangeService {
         log.info("Conexión desactivada: id={}", connectionId);
     }
 
+    @Transactional
+    public ConnectionResponse updateConnection(String userId, String connectionId,
+            String newApiKey, String newApiSecret, String label) {
+        ExchangeConnection conn = connectionRepository
+                .findByIdAndUserId(UUID.fromString(connectionId), UUID.fromString(userId))
+                .orElseThrow(() -> ApiException.notFound("Conexión no encontrada"));
+
+        if (newApiKey != null && !newApiKey.isBlank()) {
+            conn.setApiKeyEncrypted(encryptionService.encrypt(newApiKey));
+        }
+        if (newApiSecret != null && !newApiSecret.isBlank()) {
+            conn.setApiSecretEncrypted(encryptionService.encrypt(newApiSecret));
+        }
+        if (label != null) {
+            conn.setLabel(label.isBlank() ? null : label);
+        }
+        log.info("Conexión actualizada: id={}", connectionId);
+        return ConnectionResponse.from(conn);
+    }
+
     // ── Sync ─────────────────────────────────────────────────────────────────
 
     @Transactional

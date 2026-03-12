@@ -1,8 +1,14 @@
 package com.cryptostate.backend.transaction.service;
 
+import com.cryptostate.backend.common.util.MemcachedService;
+import com.cryptostate.backend.transaction.dto.TransactionResponse;
+import com.cryptostate.backend.transaction.dto.TransactionTotals;
 import com.cryptostate.backend.transaction.model.NormalizedTransaction;
 import com.cryptostate.backend.transaction.model.TransactionType;
 import com.cryptostate.backend.transaction.repository.TransactionRepository;
+import com.cryptostate.backend.transaction.repository.TransactionSpecs;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.criteria.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -10,7 +16,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -20,11 +28,9 @@ import java.util.UUID;
 public class TransactionService {
 
     private final TransactionRepository transactionRepository;
+    private final MemcachedService memcachedService;
+    private final EntityManager entityManager;
 
-    /**
-     * Persiste una lista de transacciones normalizadas, desduplicando por
-     * (userId, exchangeId, externalId). Si ya existe, actualiza rawData.
-     */
     @Transactional
     public int upsertAll(List<NormalizedTransaction> transactions) {
         int saved = 0;
@@ -34,13 +40,10 @@ public class TransactionService {
                     .ifPresentOrElse(
                             existing -> {
                                 existing.setRawData(tx.getRawData());
-                                // actualizar campos que pudieran cambiar
                                 existing.setRealizedPnl(tx.getRealizedPnl());
                                 transactionRepository.save(existing);
                             },
-                            () -> {
-                                transactionRepository.save(tx);
-                            }
+                            () -> transactionRepository.save(tx)
                     );
             saved++;
         }
@@ -48,9 +51,52 @@ public class TransactionService {
         return saved;
     }
 
-    public Page<NormalizedTransaction> findFiltered(UUID userId, String exchangeId,
+    public Page<TransactionResponse> findFiltered(UUID userId, String exchangeId,
             TransactionType type, Instant from, Instant to, Pageable pageable) {
-        return transactionRepository.findFiltered(userId, exchangeId, type, from, to, pageable);
+        return transactionRepository
+                .findAll(TransactionSpecs.filter(userId, exchangeId, type, from, to), pageable)
+                .map(TransactionResponse::from);
+    }
+
+    public TransactionTotals getTotals(UUID userId, String exchangeId,
+            TransactionType type, Instant from, Instant to) {
+
+        String cacheKey = "tx_totals:" + userId + ":" + exchangeId + ":" + type + ":" + from + ":" + to;
+        TransactionTotals cached = memcachedService.get(cacheKey);
+        if (cached != null) return cached;
+
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Object[]> cq = cb.createQuery(Object[].class);
+        Root<NormalizedTransaction> root = cq.from(NormalizedTransaction.class);
+
+        List<Predicate> predicates = new ArrayList<>();
+        predicates.add(cb.equal(root.get("userId"), userId));
+        if (exchangeId != null && !exchangeId.isBlank())
+            predicates.add(cb.equal(root.get("exchangeId"), exchangeId));
+        if (type != null)
+            predicates.add(cb.equal(root.get("type"), type));
+        if (from != null)
+            predicates.add(cb.greaterThanOrEqualTo(root.get("timestamp"), from));
+        if (to != null)
+            predicates.add(cb.lessThanOrEqualTo(root.get("timestamp"), to));
+
+        cq.multiselect(
+                cb.count(root),
+                cb.coalesce(cb.sum(root.<BigDecimal>get("realizedPnl")), BigDecimal.ZERO),
+                cb.coalesce(cb.sum(root.<BigDecimal>get("fee")), BigDecimal.ZERO),
+                cb.coalesce(cb.sum(cb.prod(root.<BigDecimal>get("quantity"), root.<BigDecimal>get("price"))), BigDecimal.ZERO)
+        ).where(predicates.toArray(new Predicate[0]));
+
+        Object[] row = entityManager.createQuery(cq).getSingleResult();
+        TransactionTotals totals = new TransactionTotals(
+                ((Number) row[0]).longValue(),
+                (BigDecimal) row[1],
+                (BigDecimal) row[2],
+                (BigDecimal) row[3]
+        );
+
+        memcachedService.set(cacheKey, 300, totals);
+        return totals;
     }
 
     public List<NormalizedTransaction> findForTaxYear(UUID userId, int year) {
