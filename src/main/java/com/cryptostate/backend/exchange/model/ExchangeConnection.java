@@ -10,8 +10,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "exchange_connections",
-    uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "exchange_id"}))
+@Table(name = "exchange_connections")
 @Getter @Setter @Builder
 @NoArgsConstructor @AllArgsConstructor
 public class ExchangeConnection {

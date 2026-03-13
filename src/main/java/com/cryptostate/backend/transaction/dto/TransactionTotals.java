@@ -1,5 +1,6 @@
 package com.cryptostate.backend.transaction.dto;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 
 public record TransactionTotals(
@@ -7,4 +8,4 @@ public record TransactionTotals(
         BigDecimal totalRealizedPnl,
         BigDecimal totalFees,
         BigDecimal totalVolume
-) {}
+) implements Serializable {}

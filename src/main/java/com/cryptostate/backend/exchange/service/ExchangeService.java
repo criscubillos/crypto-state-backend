@@ -10,12 +10,16 @@ import com.cryptostate.backend.exchange.adapter.ExchangeAdapterRegistry;
 import com.cryptostate.backend.exchange.dto.ConnectionResponse;
 import com.cryptostate.backend.exchange.dto.CreateConnectionRequest;
 import com.cryptostate.backend.exchange.dto.DirectSyncResult;
+import com.cryptostate.backend.exchange.dto.ImportResult;
+import com.cryptostate.backend.exchange.event.ImportRequestEvent;
 import com.cryptostate.backend.exchange.event.SyncRequestEvent;
+import com.cryptostate.backend.exchange.importer.ExchangeImporterRegistry;
 import com.cryptostate.backend.exchange.model.ExchangeConnection;
 import com.cryptostate.backend.exchange.model.SyncJob;
 import com.cryptostate.backend.exchange.repository.ExchangeConnectionRepository;
 import com.cryptostate.backend.exchange.repository.SyncJobRepository;
 import com.cryptostate.backend.transaction.model.NormalizedTransaction;
+import com.cryptostate.backend.transaction.service.PnlCalculatorService;
 import com.cryptostate.backend.transaction.service.TransactionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +27,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -37,8 +42,10 @@ public class ExchangeService {
     private final UserRepository userRepository;
     private final EncryptionService encryptionService;
     private final ExchangeAdapterRegistry adapterRegistry;
+    private final ExchangeImporterRegistry importerRegistry;
     private final MemcachedService memcachedService;
     private final TransactionService transactionService;
+    private final PnlCalculatorService pnlCalculatorService;
     private final ApplicationEventPublisher eventPublisher;
 
     // ── Connections ──────────────────────────────────────────────────────────
@@ -51,11 +58,6 @@ public class ExchangeService {
 
         User user = userRepository.findById(UUID.fromString(userId))
                 .orElseThrow(() -> ApiException.notFound("Usuario no encontrado"));
-
-        // Una conexión por exchange por usuario
-        if (connectionRepository.existsByUserIdAndExchangeId(UUID.fromString(userId), req.exchangeId())) {
-            throw ApiException.conflict("Ya existe una conexión con " + req.exchangeId() + ". Elimínala primero.");
-        }
 
         ExchangeConnection conn = ExchangeConnection.builder()
                 .user(user)
@@ -86,7 +88,7 @@ public class ExchangeService {
 
     @Transactional
     public ConnectionResponse updateConnection(String userId, String connectionId,
-            String newApiKey, String newApiSecret, String label) {
+            String newApiKey, String newApiSecret, String label, Boolean resetSync) {
         ExchangeConnection conn = connectionRepository
                 .findByIdAndUserId(UUID.fromString(connectionId), UUID.fromString(userId))
                 .orElseThrow(() -> ApiException.notFound("Conexión no encontrada"));
@@ -99,6 +101,10 @@ public class ExchangeService {
         }
         if (label != null) {
             conn.setLabel(label.isBlank() ? null : label);
+        }
+        if (Boolean.TRUE.equals(resetSync)) {
+            conn.setLastSyncAt(null);
+            log.info("lastSyncAt reseteado para conexión id={}", connectionId);
         }
         log.info("Conexión actualizada: id={}", connectionId);
         return ConnectionResponse.from(conn);
@@ -166,11 +172,13 @@ public class ExchangeService {
 
             Instant from = conn.getLastSyncAt() != null
                     ? conn.getLastSyncAt()
-                    : Instant.now().minus(90, java.time.temporal.ChronoUnit.DAYS);
+                    : Instant.parse("2025-01-01T00:00:00Z");
             Instant to   = Instant.now();
 
             List<NormalizedTransaction> txs = adapter.fetchAndNormalize(apiKey, apiSecret, from, to, userId);
-            int saved = transactionService.upsertAll(txs);
+            txs.forEach(tx -> tx.setConnectionId(conn.getId()));
+            TransactionService.UpsertResult result = transactionService.upsertAll(txs);
+            pnlCalculatorService.recalculateForUser(UUID.fromString(userId));
 
             conn.setLastSyncAt(to);
 
@@ -178,10 +186,11 @@ public class ExchangeService {
             job.setCompletedAt(to);
             syncJobRepository.save(job);
 
-            memcachedService.delete(MemcachedService.dashboardKey(userId));
+            memcachedService.invalidateUserDataCache(userId);
 
-            log.info("Sync directo completado: userId={} exchange={} txs={}", userId, conn.getExchangeId(), saved);
-            return new DirectSyncResult(job.getId().toString(), "DONE", conn.getExchangeId(), saved, null);
+            log.info("Sync directo completado: userId={} exchange={} txs={} ({} nuevas, {} actualizadas)",
+                    userId, conn.getExchangeId(), result.total(), result.newCount(), result.updatedCount());
+            return new DirectSyncResult(job.getId().toString(), "DONE", conn.getExchangeId(), result.total(), null);
 
         } catch (Exception e) {
             job.setStatus(SyncJob.SyncStatus.FAILED);
@@ -190,6 +199,87 @@ public class ExchangeService {
             syncJobRepository.save(job);
             log.error("Sync directo fallido: userId={} exchange={} error={}", userId, conn.getExchangeId(), e.getMessage());
             return new DirectSyncResult(job.getId().toString(), "FAILED", conn.getExchangeId(), 0, e.getMessage());
+        }
+    }
+
+    // ── Import desde Excel ────────────────────────────────────────────────────
+
+    @Transactional
+    public SyncJob queueImport(String userId, String connectionId, byte[] fileBytes) {
+        ExchangeConnection conn = connectionRepository
+                .findByIdAndUserId(UUID.fromString(connectionId), UUID.fromString(userId))
+                .orElseThrow(() -> ApiException.notFound("Conexión no encontrada"));
+
+        if (!conn.isActive()) {
+            throw ApiException.badRequest("La conexión está desactivada");
+        }
+
+        User user = userRepository.findById(UUID.fromString(userId))
+                .orElseThrow(() -> ApiException.notFound("Usuario no encontrado"));
+
+        SyncJob job = syncJobRepository.save(SyncJob.builder()
+                .user(user)
+                .exchangeId(conn.getExchangeId())
+                .build());
+
+        eventPublisher.publishEvent(new ImportRequestEvent(
+                userId, conn.getId().toString(), job.getId().toString(),
+                conn.getExchangeId(), fileBytes));
+
+        log.info("Import Excel encolado: userId={} exchange={} jobId={}",
+                userId, conn.getExchangeId(), job.getId());
+        return job;
+    }
+
+    @Transactional
+    public ImportResult directImport(String userId, String connectionId, byte[] fileBytes) {
+        ExchangeConnection conn = connectionRepository
+                .findByIdAndUserId(UUID.fromString(connectionId), UUID.fromString(userId))
+                .orElseThrow(() -> ApiException.notFound("Conexión no encontrada"));
+
+        if (!conn.isActive()) {
+            throw ApiException.badRequest("La conexión está desactivada");
+        }
+
+        User user = userRepository.findById(UUID.fromString(userId))
+                .orElseThrow(() -> ApiException.notFound("Usuario no encontrado"));
+
+        SyncJob job = syncJobRepository.save(SyncJob.builder()
+                .user(user)
+                .exchangeId(conn.getExchangeId())
+                .status(SyncJob.SyncStatus.PROCESSING)
+                .build());
+
+        try {
+            var importer = importerRegistry.get(conn.getExchangeId());
+            Instant to = Instant.now();
+
+            List<NormalizedTransaction> txs = importer.parse(
+                    new ByteArrayInputStream(fileBytes),
+                    UUID.fromString(userId),
+                    conn.getId());
+            TransactionService.UpsertResult result = transactionService.upsertAll(txs);
+            pnlCalculatorService.recalculateForUser(UUID.fromString(userId));
+
+            conn.setLastSyncAt(to);
+
+            job.setStatus(SyncJob.SyncStatus.DONE);
+            job.setCompletedAt(to);
+            syncJobRepository.save(job);
+
+            memcachedService.invalidateUserDataCache(userId);
+
+            log.info("Import directo completado: userId={} exchange={} txs={} ({} nuevas, {} actualizadas)",
+                    userId, conn.getExchangeId(), result.total(), result.newCount(), result.updatedCount());
+            return new ImportResult(job.getId().toString(), "DONE", conn.getExchangeId(), result.total(), null);
+
+        } catch (Exception e) {
+            job.setStatus(SyncJob.SyncStatus.FAILED);
+            job.setError(e.getMessage());
+            job.setCompletedAt(Instant.now());
+            syncJobRepository.save(job);
+            log.error("Import directo fallido: userId={} exchange={} error={}", userId, conn.getExchangeId(), e.getMessage());
+            return new ImportResult(job.getId().toString(), "FAILED", conn.getExchangeId(), 0, e.getMessage());
         }
     }
 }

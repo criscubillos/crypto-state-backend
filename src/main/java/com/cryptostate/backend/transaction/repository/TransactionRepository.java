@@ -18,12 +18,15 @@ public interface TransactionRepository
                 JpaSpecificationExecutor<NormalizedTransaction> {
 
     /** Para deduplicación al importar */
-    Optional<NormalizedTransaction> findByUserIdAndExchangeIdAndExternalId(
-        UUID userId, String exchangeId, String externalId);
+    Optional<NormalizedTransaction> findByUserIdAndConnectionIdAndExternalId(
+        UUID userId, UUID connectionId, String externalId);
 
     /** Para cálculo de impuestos: transacciones de un año */
     List<NormalizedTransaction> findByUserIdAndTimestampBetweenOrderByTimestampAsc(
         UUID userId, Instant from, Instant to);
+
+    /** Para cálculo FIFO: todas las transacciones del usuario ordenadas por tiempo */
+    List<NormalizedTransaction> findByUserIdOrderByTimestampAsc(UUID userId);
 
     /** Exchanges que el usuario tiene datos */
     @Query("SELECT DISTINCT t.exchangeId FROM NormalizedTransaction t WHERE t.userId = :userId")

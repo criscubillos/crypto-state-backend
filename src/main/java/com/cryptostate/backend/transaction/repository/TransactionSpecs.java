@@ -13,14 +13,16 @@ import java.util.UUID;
 public class TransactionSpecs {
 
     public static Specification<NormalizedTransaction> filter(
-            UUID userId, String exchangeId, TransactionType type, Instant from, Instant to) {
+            UUID userId, UUID connectionId, String exchangeId, List<TransactionType> types, Instant from, Instant to) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             predicates.add(cb.equal(root.get("userId"), userId));
+            if (connectionId != null)
+                predicates.add(cb.equal(root.get("connectionId"), connectionId));
             if (exchangeId != null && !exchangeId.isBlank())
                 predicates.add(cb.equal(root.get("exchangeId"), exchangeId));
-            if (type != null)
-                predicates.add(cb.equal(root.get("type"), type));
+            if (types != null && !types.isEmpty())
+                predicates.add(root.get("type").in(types));
             if (from != null)
                 predicates.add(cb.greaterThanOrEqualTo(root.get("timestamp"), from));
             if (to != null)

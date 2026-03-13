@@ -25,8 +25,8 @@ public class AppProperties {
     @Getter @Setter
     public static class Jwt {
         private String secret;
-        private long accessTokenExpirationMs = 900000L;
-        private long refreshTokenExpirationMs = 604800000L;
+        private long accessTokenExpirationMs  = 900000L;    // 15 min
+        private long refreshTokenExpirationMs = 2592000000L; // 30 días
     }
 
     @Getter @Setter

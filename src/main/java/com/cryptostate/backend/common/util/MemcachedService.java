@@ -55,6 +55,28 @@ public class MemcachedService {
         log.info("Cache invalidado para usuario={}", userId);
     }
 
+    /**
+     * Invalida solo los datos de usuario (dashboard, etc.) sin tocar sesiones ni tokens.
+     * Llamar después de imports o syncs para refrescar los datos sin desloguear al usuario.
+     */
+    public void invalidateUserDataCache(String userId) {
+        delete(dashboardKey(userId));
+        log.debug("Cache de datos invalidado para userId={}", userId);
+    }
+
+    /**
+     * Vacía todo el caché. Usar tras importaciones o syncs masivos
+     * para asegurar que los totales y dashboards reflejen los datos nuevos.
+     */
+    public void flushAll() {
+        try {
+            memcachedClient.flush();
+            log.debug("Memcached flush_all ejecutado");
+        } catch (Exception e) {
+            log.warn("Memcached flush_all failed: {}", e.getMessage());
+        }
+    }
+
     // ── Fábricas de claves ──────────────────────────────────────────────────
 
     public static String sessionKey(String userId) {

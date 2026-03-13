@@ -8,6 +8,7 @@ import java.time.Instant;
 
 public record TransactionResponse(
         String id,
+        String connectionId,
         String exchangeId,
         String externalId,
         TransactionType type,
@@ -18,11 +19,14 @@ public record TransactionResponse(
         BigDecimal fee,
         String feeAsset,
         BigDecimal realizedPnl,
+        BigDecimal realizedPnlUsd,
+        BigDecimal feeUsd,
         Instant timestamp
 ) {
     public static TransactionResponse from(NormalizedTransaction tx) {
         return new TransactionResponse(
                 tx.getId().toString(),
+                tx.getConnectionId() != null ? tx.getConnectionId().toString() : null,
                 tx.getExchangeId(),
                 tx.getExternalId(),
                 tx.getType(),
@@ -33,6 +37,8 @@ public record TransactionResponse(
                 tx.getFee(),
                 tx.getFeeAsset(),
                 tx.getRealizedPnl(),
+                tx.getRealizedPnlUsd(),
+                tx.getFeeUsd(),
                 tx.getTimestamp()
         );
     }

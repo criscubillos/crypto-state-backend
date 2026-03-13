@@ -1,10 +1,9 @@
 package com.cryptostate.backend.exchange.worker;
 
-import com.cryptostate.backend.common.util.EncryptionService;
 import com.cryptostate.backend.common.util.MemcachedService;
-import com.cryptostate.backend.exchange.adapter.ExchangeAdapter;
-import com.cryptostate.backend.exchange.adapter.ExchangeAdapterRegistry;
-import com.cryptostate.backend.exchange.event.SyncRequestEvent;
+import com.cryptostate.backend.exchange.event.ImportRequestEvent;
+import com.cryptostate.backend.exchange.importer.ExchangeImporter;
+import com.cryptostate.backend.exchange.importer.ExchangeImporterRegistry;
 import com.cryptostate.backend.exchange.model.ExchangeConnection;
 import com.cryptostate.backend.exchange.model.SyncJob;
 import com.cryptostate.backend.exchange.repository.ExchangeConnectionRepository;
@@ -20,20 +19,22 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class SyncWorker {
+public class ImportWorker {
 
     private final ExchangeConnectionRepository connectionRepository;
     private final SyncJobRepository syncJobRepository;
-    private final ExchangeAdapterRegistry adapterRegistry;
-    private final EncryptionService encryptionService;
+    private final ExchangeImporterRegistry importerRegistry;
     private final TransactionService transactionService;
     private final PnlCalculatorService pnlCalculatorService;
     private final MemcachedService memcachedService;
@@ -46,8 +47,8 @@ public class SyncWorker {
     @Async("syncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
-    public void onSyncRequest(SyncRequestEvent event) {
-        log.info("SyncWorker procesando: jobId={} exchange={} userId={}",
+    public void onImportRequest(ImportRequestEvent event) {
+        log.info("ImportWorker procesando: jobId={} exchange={} userId={}",
                 event.jobId(), event.exchangeId(), event.userId());
 
         SyncJob job = syncJobRepository.findById(UUID.fromString(event.jobId()))
@@ -70,24 +71,20 @@ public class SyncWorker {
         }
 
         try {
-            ExchangeAdapter adapter = adapterRegistry.get(event.exchangeId());
-            String apiKey    = encryptionService.decrypt(conn.getApiKeyEncrypted());
-            String apiSecret = encryptionService.decrypt(conn.getApiSecretEncrypted());
+            ExchangeImporter importer = importerRegistry.get(event.exchangeId());
 
-            Instant from = conn.getLastSyncAt() != null
-                    ? conn.getLastSyncAt()
-                    : Instant.parse("2025-01-01T00:00:00Z");
+            Instant importStart = Instant.now();
             Instant to = Instant.now();
-            Instant syncStart = Instant.now();
 
-            UUID connectionUuid = conn.getId();
-            List<NormalizedTransaction> txs = adapter.fetchAndNormalize(apiKey, apiSecret, from, to, event.userId());
-            txs.forEach(tx -> tx.setConnectionId(connectionUuid));
+            List<NormalizedTransaction> txs = importer.parse(
+                    new ByteArrayInputStream(event.fileBytes()),
+                    UUID.fromString(event.userId()),
+                    conn.getId());
 
             // Conteo por tipo para el resumen
-            java.util.Map<String, Long> byType = txs.stream()
-                    .collect(java.util.stream.Collectors.groupingBy(
-                            tx -> tx.getType().name(), java.util.stream.Collectors.counting()));
+            Map<String, Long> byType = txs.stream()
+                    .collect(Collectors.groupingBy(
+                            tx -> tx.getType().name(), Collectors.counting()));
 
             TransactionService.UpsertResult result = transactionService.upsertAll(txs);
             pnlCalculatorService.recalculateForUser(UUID.fromString(event.userId()));
@@ -101,12 +98,13 @@ public class SyncWorker {
 
             memcachedService.invalidateUserDataCache(event.userId());
 
-            long durationSec = ChronoUnit.SECONDS.between(syncStart, Instant.now());
+            long durationSec = ChronoUnit.SECONDS.between(importStart, Instant.now());
             String connLabel = conn.getLabel() != null ? conn.getLabel() : conn.getExchangeId();
             log.info("╔══════════════════════════════════════════════════════");
-            log.info("║ SYNC COMPLETADO");
+            log.info("║ IMPORT COMPLETADO (EXCEL)");
             log.info("║  jobId    : {}", event.jobId());
             log.info("║  Exchange : {} ({})", event.exchangeId(), connLabel);
+            log.info("║  Source   : EXCEL");
             log.info("║  Duración : {} segundos", durationSec);
             log.info("║  Total    : {} transacciones ({} nuevas, {} actualizadas)",
                     result.total(), result.newCount(), result.updatedCount());
@@ -116,7 +114,7 @@ public class SyncWorker {
             log.info("╚══════════════════════════════════════════════════════");
 
         } catch (Exception e) {
-            log.error("Sync fallido: jobId={} error={}", event.jobId(), e.getMessage(), e);
+            log.error("Import fallido: jobId={} error={}", event.jobId(), e.getMessage(), e);
             failJob(job, e.getMessage());
         }
     }

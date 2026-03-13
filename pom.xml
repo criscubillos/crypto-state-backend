@@ -122,6 +122,13 @@
             <version>${bucket4j.version}</version>
         </dependency>
 
+        <!-- Apache POI (lectura de archivos Excel/XLSX) -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.3.0</version>
+        </dependency>
+
         <!-- HTTP Client (para llamadas a exchanges y Cloudflare) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
