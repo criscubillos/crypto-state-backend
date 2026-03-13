@@ -15,8 +15,9 @@ import java.util.UUID;
     indexes = {
         @Index(columnList = "user_id"),
         @Index(columnList = "exchange_id"),
+        @Index(columnList = "connection_id"),
         @Index(columnList = "timestamp"),
-        @Index(columnList = "user_id, exchange_id, external_id", unique = true)
+        @Index(columnList = "user_id, connection_id, external_id", unique = true)
     })
 @Getter @Setter @Builder
 @NoArgsConstructor @AllArgsConstructor
@@ -27,6 +28,10 @@ public class NormalizedTransaction {
 
     @Column(name = "user_id", nullable = false)
     private UUID userId;
+
+    /** ID de la conexión (cuenta API) que originó esta transacción */
+    @Column(name = "connection_id")
+    private UUID connectionId;
 
     @Column(name = "exchange_id", nullable = false)
     private String exchangeId;
@@ -57,6 +62,14 @@ public class NormalizedTransaction {
     /** Ganancia/pérdida realizada en esta transacción */
     @Column(precision = 30, scale = 10)
     private BigDecimal realizedPnl;
+
+    /** G/P realizado convertido a USD (1:1 para USDT, precio histórico para otras monedas) */
+    @Column(name = "realized_pnl_usd", precision = 30, scale = 10)
+    private BigDecimal realizedPnlUsd;
+
+    /** Comisión convertida a USD */
+    @Column(name = "fee_usd", precision = 30, scale = 10)
+    private BigDecimal feeUsd;
 
     @Column(nullable = false)
     private Instant timestamp;
