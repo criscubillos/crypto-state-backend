@@ -4,15 +4,19 @@ import com.cryptostate.backend.exchange.dto.ConnectionResponse;
 import com.cryptostate.backend.exchange.dto.CreateConnectionRequest;
 import com.cryptostate.backend.exchange.dto.DirectSyncResult;
 import com.cryptostate.backend.exchange.dto.ImportResult;
+import com.cryptostate.backend.exchange.dto.SyncProgressEvent;
 import com.cryptostate.backend.exchange.dto.UpdateConnectionRequest;
 import com.cryptostate.backend.exchange.model.SyncJob;
 import com.cryptostate.backend.exchange.service.ExchangeService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.security.Principal;
@@ -25,6 +29,7 @@ import java.util.Map;
 public class ExchangeController {
 
     private final ExchangeService exchangeService;
+    private final ObjectMapper objectMapper;
 
     @PostMapping("/connections")
     public ResponseEntity<ConnectionResponse> createConnection(
@@ -78,6 +83,41 @@ public class ExchangeController {
                 "status", job.getStatus().name(),
                 "exchangeId", job.getExchangeId()
         ));
+    }
+
+    // ── Sync-all via SSE ──────────────────────────────────────────────────────
+
+    /**
+     * SSE: emite eventos de progreso mientras sincroniza todos los exchanges del usuario.
+     * El token se pasa como query param ?token= porque EventSource no admite headers.
+     * El JwtAuthFilter ya lo valida antes de llegar aquí.
+     */
+    @GetMapping(value = "/sync-all/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter syncAllStream(Principal principal) {
+        SseEmitter emitter = new SseEmitter(300_000L); // 5 min timeout
+        String userId = principal.getName();
+
+        Thread thread = new Thread(() -> {
+            try {
+                exchangeService.syncAllWithProgress(userId, (SyncProgressEvent event) -> {
+                    try {
+                        emitter.send(SseEmitter.event()
+                                .name(event.type())
+                                .data(objectMapper.writeValueAsString(event)));
+                    } catch (IOException e) {
+                        emitter.completeWithError(e);
+                    }
+                });
+                emitter.complete();
+            } catch (Exception e) {
+                emitter.completeWithError(e);
+            }
+        });
+        thread.setName("sse-sync-" + userId.substring(0, 8));
+        thread.setDaemon(true);
+        thread.start();
+
+        return emitter;
     }
 
     @PostMapping("/connections/{id}/import")

@@ -27,10 +27,13 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.cryptostate.backend.exchange.dto.SyncProgressEvent;
+
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 @Slf4j
 @Service
@@ -200,6 +203,95 @@ public class ExchangeService {
             log.error("Sync directo fallido: userId={} exchange={} error={}", userId, conn.getExchangeId(), e.getMessage());
             return new DirectSyncResult(job.getId().toString(), "FAILED", conn.getExchangeId(), 0, e.getMessage());
         }
+    }
+
+    // ── Sync-all con progreso SSE ─────────────────────────────────────────────
+
+    public void syncAllWithProgress(String userId, Consumer<SyncProgressEvent> onProgress) {
+        List<ExchangeConnection> connections =
+                connectionRepository.findByUserIdAndActiveTrue(UUID.fromString(userId));
+
+        if (connections.isEmpty()) {
+            onProgress.accept(new SyncProgressEvent("COMPLETE", null, null,
+                    "No tienes exchanges conectados", 0));
+            return;
+        }
+
+        int totalSaved = 0;
+
+        for (ExchangeConnection conn : connections) {
+            if (!conn.isActive()) continue;
+
+            String name = conn.getLabel() != null && !conn.getLabel().isBlank()
+                    ? conn.getLabel()
+                    : capitalize(conn.getExchangeId());
+
+            onProgress.accept(new SyncProgressEvent(
+                    "START", conn.getExchangeId(), name, "Conectando con " + name + "…", 0));
+
+            try {
+                ExchangeAdapter adapter = adapterRegistry.get(conn.getExchangeId());
+                String apiKey    = encryptionService.decrypt(conn.getApiKeyEncrypted());
+                String apiSecret = encryptionService.decrypt(conn.getApiSecretEncrypted());
+
+                Instant from = conn.getLastSyncAt() != null
+                        ? conn.getLastSyncAt()
+                        : Instant.parse("2025-01-01T00:00:00Z");
+                Instant to = Instant.now();
+
+                List<NormalizedTransaction> txs =
+                        adapter.fetchAndNormalize(apiKey, apiSecret, from, to, userId);
+                txs.forEach(tx -> tx.setConnectionId(conn.getId()));
+
+                TransactionService.UpsertResult result = transactionService.upsertAll(txs);
+
+                conn.setLastSyncAt(to);
+                connectionRepository.save(conn);
+
+                totalSaved += result.total();
+
+                String detail = result.total() == 0
+                        ? "Sin transacciones nuevas"
+                        : result.total() + " transacciones (" + result.newCount()
+                          + " nuevas, " + result.updatedCount() + " actualizadas)";
+
+                onProgress.accept(new SyncProgressEvent(
+                        "DONE", conn.getExchangeId(), name, detail, result.total()));
+
+            } catch (Exception e) {
+                log.error("sync-all error: userId={} exchange={} error={}",
+                        userId, conn.getExchangeId(), e.getMessage());
+                String friendly = simplifyError(e.getMessage());
+                onProgress.accept(new SyncProgressEvent(
+                        "ERROR", conn.getExchangeId(), name, friendly, 0));
+            }
+        }
+
+        pnlCalculatorService.recalculateForUser(UUID.fromString(userId));
+        memcachedService.invalidateUserDataCache(userId);
+
+        String summary = totalSaved == 0
+                ? "Sincronización completada — sin novedades"
+                : "Sincronización completada — " + totalSaved + " transacciones en total";
+        onProgress.accept(new SyncProgressEvent("COMPLETE", null, null, summary, totalSaved));
+        log.info("sync-all completado: userId={} totalSaved={}", userId, totalSaved);
+    }
+
+    private static String capitalize(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    private static String simplifyError(String msg) {
+        if (msg == null) return "Error desconocido";
+        if (msg.contains("Connection refused") || msg.contains("connect timed out"))
+            return "No se pudo conectar con el exchange";
+        if (msg.contains("401") || msg.contains("Unauthorized"))
+            return "Credenciales inválidas o expiradas";
+        if (msg.contains("Too many requests") || msg.contains("429"))
+            return "Límite de solicitudes alcanzado, intenta más tarde";
+        if (msg.length() > 120) return msg.substring(0, 120) + "…";
+        return msg;
     }
 
     // ── Import desde Excel ────────────────────────────────────────────────────
